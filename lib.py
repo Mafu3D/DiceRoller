@@ -8,71 +8,93 @@ class Dice():
 
     def __init__(self, sides: int=6) -> None:
         self.sides = sides
+        self.has_rolled = False
+        self.result = None
 
-    def get_roll(self) -> int:
-        return random.randint(1, self.sides)
+    def roll(self) -> int:
+        self.has_rolled = True
+        self.result = random.randint(1, self.sides)
+        return self.result
 
-class DieCluster():
+    def get_result(self) -> int:
+        return self.result
+
+    def toString(self) -> str:
+        return f"d{self.sides}"
+
+class DiceCluster():
     """A collection of an amount of die with the same number of sides."""
 
-    def __init__(self, amount: int=1, sides: int=6) -> None:
-        self.dice = []
+    def __init__(self, amount: int=1, sides: int=6, bonuses=[], is_subtractive: bool=False) -> None:
         self.sides = sides
+        self.is_subtractive = is_subtractive
+        self.bonuses = bonuses
+
+        self.die_results = []
+        self.dice = []
+        self.has_rolled = False
+        self.roll_report = RollReport()
+        self.result = 0
         for _ in range(amount):
             self.dice.append(Dice(self.sides))
 
-    def get_roll(self) -> list[int]:
-        return [die.get_roll() for die in self.dice]
+    @property
+    def modifier(self) -> int:
+        return -1 if self.is_subtractive else 1
 
-    def toDict(self) -> dict:
-        return {
-            "amount": len(self.dice),
-            "sides": self.sides
-        }
+    def roll(self) -> list[int]:
+        for die in self.dice:
+            die_result = die.roll() * self.modifier
+            self.die_results.append(die_result)
+            self.roll_report.add_dice(die, die_result)
 
-    def toDiceNotation(self) -> str:
-        return f"{len(self.dice)}d{self.sides}"
+        for bonus in self.bonuses:
+            self.roll_report.add_bonuses(bonus)
+
+        self.result = sum(self.die_results) + sum(self.bonuses)
+
+        self.roll_report.total = self.result
+        self.has_rolled = True
+        return self.result
+
+    def get_result(self) -> list[int]:
+        return self.result
+
+    def toString(self) -> str:
+        bonus_string = ""
+        for bonus in self.bonuses:
+            bonus_string += f"{'+' if bonus >= 0 else ''}{str(bonus)}"
+        return f"{'+' if not self.is_subtractive else '-'}{len(self.dice)}d{self.sides}{bonus_string}"
 
 
 class Roll():
     """A collection of dice, bonuses, and instructions using dice notation."""
 
-    def __init__(self, dice_notation: str="") -> None:
-        parsed_data = ParseDiceNotation.parse(dice_notation)
+    def __init__(self, dice_clusters: list[DiceCluster]|DiceCluster=[], bonuses: list[int]=[], dice_notation: str="") -> None:
+        # parsed_data = ParseDiceNotation.parse(dice_notation)
 
-        self.pos_dice = [DieCluster(amount=die_cluster_data["amount"], sides=die_cluster_data["sides"]) for die_cluster_data in parsed_data.pos_dice]
-        self.neg_dice = [DieCluster(amount=die_cluster_data["amount"], sides=die_cluster_data["sides"]) for die_cluster_data in parsed_data.neg_dice]
-        self.pos_bonuses = parsed_data.pos_bonuses
-        self.neg_bonuses = parsed_data.neg_bonuses
+        # self.dice_clusters = [DiceCluster(amount=die_cluster_data["amount"], sides=die_cluster_data["sides"]) for die_cluster_data in parsed_data.pos_dice]
+        if not isinstance(dice_clusters, list):
+            dice_clusters = [dice_clusters]
+        self.dice_clusters = dice_clusters
+        self.bonuses = bonuses
 
     def roll(self, print_message: bool=False) -> int:
-        value = 0
+        total = 0
         message = ""
 
-        pos_die_results = []
-        for cluster in self.pos_dice:
-            values = cluster.get_roll()
-            message += f"+{sum(values)} ({cluster.toDiceNotation()}) "
-            pos_die_results.extend(cluster.get_roll())
+        dice_results = []
+        for cluster in self.dice_clusters:
+            cluster.roll()
+            values = cluster.get_results()
+            dice_results.extend(values)
 
-        neg_die_results = []
-        for cluster in self.neg_dice:
-            values = cluster.get_roll()
-            message += f"-{sum(values)} ({cluster.toDiceNotation()}) "
-            neg_die_results.extend(cluster.get_roll())
+        for total in dice_results + self.bonuses:
+            total += total
 
-        for pos_value in pos_die_results + self.pos_bonuses:
-            value += pos_value
 
-        for neg_value in neg_die_results + self.neg_bonuses:
-            value -= neg_value
 
-        if print_message:
-            if message.endswith(" "):
-                message = message[:-1]
-            print(f"{message} + {sum(self.pos_bonuses)} - {sum(self.neg_bonuses)} => {value}")
-
-        return value
+        return total
 
 
     def add_dice(self, dice_notation: str="", amount: int=0, value: int=0):
@@ -86,9 +108,9 @@ class Roll():
 
     def serializeToDict(self) -> dict:
         return {
-            "pos_dice": [cluster.toDict() for cluster in self.pos_dice],
+            "pos_dice": [cluster.toDict() for cluster in self.dice_clusters],
             "neg_dice": [cluster.toDict() for cluster in self.neg_dice],
-            "pos_bonuses": self.pos_bonuses,
+            "pos_bonuses": self.bonuses,
             "neg_bonuses": self.neg_bonuses
         }
 
@@ -128,6 +150,34 @@ class Roll():
         #         self.bonuses.remove(value)
 
 class RollReport():
+
+    def __init__(self):
+        self.dice_results = {}
+        self.bonuses = []
+        self.is_subtractive = False
+        self.total = None
+
+    def add_dice(self, die: Dice, result: int):
+        self.dice_results[die.toString()] = result
+
+    def set_is_subtractive(self, value: bool):
+        self.is_subtractive = value
+
+    def add_bonuses(self, bonus: int):
+        self.bonuses.append(bonus)
+
+    def set_total(self, total: int):
+        self.total = total
+
+    def get_message(self) -> str:
+        output = ""
+        modifier = "-" if self.is_subtractive else "+"
+        output += f"{modifier}"
+        for dice, result in self.dice_results:
+            output += f"{result} ({dice})"
+        return output
+
+class RollFactory():
     pass
 
 class ParsedDiceData():
